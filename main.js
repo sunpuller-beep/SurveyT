@@ -343,6 +343,7 @@ function renderResultPage() {
     '    <p class="result-note">영역별 파이차트 아래에는 세부영역 점수표를 추가해 결과를 더 세밀하게 비교할 수 있게 했습니다.</p>',
     '    <div class="button-row">',
     '      <button class="btn btn--ghost" type="button" data-action="prev">이전 페이지</button>',
+    '      <button class="btn btn--primary" type="button" data-action="ai-analysis">AI결과 분석</button>',
     '      <button class="btn btn--ghost" type="button" data-action="print">인쇄 / PDF 저장</button>',
     '      <button class="btn btn--ghost" type="button" data-action="reset">응답 초기화</button>',
     '      <button class="btn btn--success" type="button" data-action="restart">처음으로 이동</button>',
