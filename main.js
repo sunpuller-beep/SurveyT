@@ -232,7 +232,7 @@ function renderSectionPage(section, pageIndex) {
     '  </div>',
     subsectionMarkup,
     '  <div class="page-actions">',
-    '    <div class="page-actions__hint">현재 페이지의 응답은 자동 저장됩니다.</div>',
+    '    <div class="page-actions__hint">단계별 응답은 언제나 수정 가능합니다.(현재 응답 결과에만 사용되며, 별도 저장되지 않습니다.)</div>',
     '    <div class="button-row">',
     '      <button class="btn btn--ghost" type="button" data-action="prev" ' + (pageIndex === 0 ? 'disabled' : '') + '>이전 페이지</button>',
     '      <button class="btn btn--primary" type="button" data-action="next">' + (pageIndex === STATE.sections.length - 1 ? '결과 보기' : '다음 페이지') + '</button>',
@@ -301,12 +301,7 @@ function renderResultPage() {
       '    </div>',
       '    <span class="meta-chip">' + item.percent + '%</span>',
       '  </div>',
-      '  <div class="chart" style="--value: ' + item.percent + ';">',
-      '    <div class="chart__center">',
-      '      <span class="chart__score">' + item.score + '</span>',
-      '      <span class="chart__meta">/ ' + item.maxScore + '점</span>',
-      '    </div>',
-      '  </div>',
+      renderDonutChart(item.score, item.maxScore, item.percent),
       '  <div class="summary-stats">',
       '    <div class="summary-stat"><strong>' + item.questionCount + '개</strong><span>문항 수</span></div>',
       '    <div class="summary-stat"><strong>' + item.average + '</strong><span>평균 점수</span></div>',
@@ -327,10 +322,12 @@ function renderResultPage() {
     '  <div class="result-header">',
     '    <div>',
     '      <p class="page-label">Results</p>',
-    '      <h2>영역별 결과 보기</h2>',
-    '      <p class="result-subtitle">각 대영역의 합계를 파이차트로 시각화했습니다. 파란 영역은 현재 획득 점수, 회색 영역은 남은 최대 점수입니다.</p>',
+    '      <h2 class="no-print">영역별 결과 보기</h2>',
+    '      <h2 class="print-only">경남 교원 핵심역량 진단 결과</h2>',
+    '      <p class="result-subtitle no-print">각 대영역의 합계를 파이차트로 시각화했습니다. 파란 영역은 현재 획득 점수, 회색 영역은 남은 최대 점수입니다.</p>',
+    '      <p class="result-subtitle print-only">진단 일시: ' + renderDiagnosisDatetime() + '</p>',
     '    </div>',
-    '    <div class="section-meta">',
+    '    <div class="section-meta no-print">',
     '      <span class="score-hint">총 응답 수</span>',
     '      <strong>' + Object.keys(STATE.responses).length + ' / ' + getAllQuestions().length + '</strong>',
     '      <span class="save-hint">' + renderSaveHint() + '</span>',
@@ -340,7 +337,6 @@ function renderResultPage() {
     summaryMarkup,
     '  </div>',
     '  <div class="result-footer">',
-    '    <p class="result-note">영역별 파이차트 아래에는 세부영역 점수표를 추가해 결과를 더 세밀하게 비교할 수 있게 했습니다.</p>',
     '    <div class="button-row">',
     '      <button class="btn btn--ghost" type="button" data-action="prev">이전 페이지</button>',
     '      <button class="btn btn--primary" type="button" data-action="ai-analysis">AI결과 분석</button>',
@@ -369,6 +365,39 @@ function renderSaveHint() {
   });
 
   return time + ' 자동 저장';
+}
+
+function renderDonutChart(score, maxScore, percent) {
+  const radius = 46;
+  const circumference = 2 * Math.PI * radius;
+  const dash = (circumference * percent) / 100;
+  const gap = circumference - dash;
+
+  return [
+    '<div class="chart" aria-label="점수 ' + score + ' / ' + maxScore + '">',
+    '  <svg class="chart__svg" viewBox="0 0 120 120" aria-hidden="true">',
+    '    <circle class="chart__track" cx="60" cy="60" r="46"></circle>',
+    '    <circle class="chart__fill" cx="60" cy="60" r="46" stroke-dasharray="' + dash.toFixed(2) + ' ' + gap.toFixed(2) + '"></circle>',
+    '  </svg>',
+    '  <div class="chart__center">',
+    '    <span class="chart__score">' + score + '</span>',
+    '    <span class="chart__meta">/ ' + maxScore + '점</span>',
+    '  </div>',
+    '</div>',
+  ].join('');
+}
+
+function renderDiagnosisDatetime() {
+  const base = STATE.savedAt ? new Date(STATE.savedAt) : new Date();
+  const date = Number.isNaN(base.getTime()) ? new Date() : base;
+
+  return date.toLocaleString('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function renderAiModal() {
