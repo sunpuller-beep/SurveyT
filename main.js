@@ -412,6 +412,7 @@ function renderAiModal() {
     '      <p class="modal-sheet__subtext">아래 내용을 복사해서 AI 도구(ChatGPT, 제미나이 등)에 분석해보세요</p>',
     '    </div>',
     '    <div class="button-row">',
+    '      <button class="btn btn--primary btn--compact" type="button" data-action="open-chatgpt">ChatGPT</button>',
     '      <button class="btn btn--ghost btn--compact" type="button" data-action="copy-ai-prompt">복사하기</button>',
     '      <button class="btn btn--ghost btn--compact" type="button" data-action="close-modal">닫기</button>',
     '    </div>',
@@ -423,60 +424,120 @@ function renderAiModal() {
   ].join('');
 }
 
-function buildAiPrompt() {
+function normalizePromptQuestionText(value) {
+  return String(value)
+    .replace(/^나는\s+/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[.。]\s*$/, '')
+    .trim();
+}
+
+function buildAiPromptPayload() {
   const allQuestions = getAllQuestions();
   const totalScore = allQuestions.reduce(function(sum, question) {
     return sum + (STATE.responses[question.id] || 0);
   }, 0);
   const overallAverage = allQuestions.length ? (totalScore / allQuestions.length).toFixed(2) : '0.00';
 
-  const sectionSummary = STATE.sections.map(function(section) {
-    const questionCount = countSectionQuestions(section);
-    const score = getSectionScore(section);
-    const average = questionCount ? (score / questionCount).toFixed(2) : '0.00';
-    const subsectionLines = section.subsections.map(function(subsection) {
+  const sectionLegend = [];
+  const compactLegend = [];
+  const sectionSummary = [];
+  const questionScores = [];
+  const compactQuestionScores = [];
+
+  STATE.sections.forEach(function(section, sectionIndex) {
+    const sectionCode = 'S' + (sectionIndex + 1);
+    const sectionQuestionCount = countSectionQuestions(section);
+    const sectionScore = getSectionScore(section);
+    const sectionAverage = sectionQuestionCount ? (sectionScore / sectionQuestionCount).toFixed(2) : '0.00';
+
+    sectionLegend.push(sectionCode + '=' + section.title + '|' + section.description);
+    compactLegend.push(sectionCode + '=' + section.title);
+
+    const subsectionSummary = section.subsections.map(function(subsection, subsectionIndex) {
+      const subsectionCode = sectionCode + '-' + (subsectionIndex + 1);
       const subsectionScore = getSubsectionScore(subsection);
       const subsectionAverage = subsection.questions.length
         ? (subsectionScore / subsection.questions.length).toFixed(2)
         : '0.00';
+      const categories = Array.from(new Set(subsection.questions.map(function(question) {
+        return question.category;
+      }).filter(Boolean)));
 
-      return '- 세부영역: ' + subsection.title + ' | 합계: ' + subsectionScore + ' | 평균: ' + subsectionAverage;
-    }).join('\n');
+      sectionLegend.push(subsectionCode + '=' + subsection.title + (categories.length ? '|' + categories.join(',') : ''));
+      compactLegend.push(subsectionCode + '=' + subsection.title);
 
-    return [
-      '[영역] ' + section.title,
-      '- 영역 설명: ' + section.description,
-      '- 문항 수: ' + questionCount,
-      '- 합계 점수: ' + score,
-      '- 평균 점수: ' + average,
-      subsectionLines,
-    ].join('\n');
-  }).join('\n\n');
+      subsection.questions.forEach(function(question, questionIndex) {
+        const questionCode = subsectionCode + '-' + (questionIndex + 1);
+        const score = STATE.responses[question.id] || 0;
+        questionScores.push(questionCode + '=' + score + '|' + question.text);
+        compactQuestionScores.push(questionCode + '=' + score + '|' + normalizePromptQuestionText(question.text));
+      });
 
-  const questionSummary = STATE.sections.map(function(section) {
-    return section.subsections.map(function(subsection) {
-      return subsection.questions.map(function(question, index) {
-        return '- ' + section.title + ' > ' + subsection.title + ' > 문항 ' + (index + 1) + ': ' + question.text + ' = ' + (STATE.responses[question.id] || 0) + '점';
-      }).join('\n');
-    }).join('\n');
-  }).join('\n');
+      return subsectionCode + ':' + subsectionAverage + '(' + subsectionScore + '/' + subsection.questions.length + ')';
+    }).join(' ; ');
+
+    sectionSummary.push(sectionCode + ':' + sectionAverage + '(' + sectionScore + '/' + sectionQuestionCount + ') [' + subsectionSummary + ']');
+  });
+
+  return {
+    allQuestions,
+    totalScore,
+    overallAverage,
+    sectionLegend,
+    compactLegend,
+    sectionSummary,
+    questionScores,
+    compactQuestionScores,
+  };
+}
+
+function buildAiPrompt() {
+  const payload = buildAiPromptPayload();
 
   return [
     STATE.promptTemplate.trim(),
     '',
-    '[응답 결과 요약]',
-    '- 전체 문항 수: ' + allQuestions.length,
-    '- 총합 점수: ' + totalScore,
-    '- 전체 평균 점수: ' + overallAverage,
+    '[데이터 규칙]',
+    '- 점수는 1~5점: 1 매우 낮음, 3 보통, 5 매우 높음',
+    '- 코드 체계: S영역-세부영역-문항번호',
+    '- 범례와 점수를 함께 읽고 강점, 약점, 패턴을 해석할 것',
+    '',
+    '[전체 요약]',
+    '- 문항수=' + payload.allQuestions.length + ', 총점=' + payload.totalScore + ', 평균=' + payload.overallAverage,
+    '',
+    '[영역/세부영역 범례]',
+    payload.sectionLegend.join('\n'),
     '',
     '[영역별 결과]',
-    sectionSummary,
+    payload.sectionSummary.join('\n'),
     '',
     '[문항별 점수]',
-    questionSummary,
+    payload.questionScores.join('\n'),
   ].join('\n');
 }
 
+function buildChatGptLinkPrompt() {
+  const payload = buildAiPromptPayload();
+
+  return [
+    '교원 역량 컨설턴트로서 아래 1~5점 자기진단 데이터를 전문 리포트로 분석하라.',
+    '출력: 1종합진단 2영역별분석 3교사유형 4핵심과제Top3 5단기·중기·장기 실행전략 6성장로드맵 7전문가코멘트.',
+    '규칙: 단순 점수나열 금지, 행동기반 피드백, 수업·학생·학급·동료교사 맥락 반영, 간결하지만 전문적으로 작성.',
+    '',
+    '[요약]',
+    'Q=' + payload.allQuestions.length + ',T=' + payload.totalScore + ',A=' + payload.overallAverage,
+    '',
+    '[영역코드]',
+    payload.compactLegend.join('\n'),
+    '',
+    '[영역결과]',
+    payload.sectionSummary.join('\n'),
+    '',
+    '[문항점수]',
+    payload.compactQuestionScores.join('\n'),
+  ].join('\n');
+}
 function bindEvents() {
   app.querySelectorAll('input[type="radio"]').forEach(function(input) {
     input.addEventListener('change', handleAnswerChange);
@@ -552,6 +613,11 @@ function handleAction(event) {
     return;
   }
 
+  if (action === 'open-chatgpt') {
+    openChatGptPrompt();
+    return;
+  }
+
   if (action === 'print') {
     window.print();
     return;
@@ -583,6 +649,22 @@ function copyAiPrompt() {
   }
 
   fallbackCopy(promptText);
+}
+
+function openChatGptPrompt() {
+  const promptText = buildChatGptLinkPrompt();
+  const encodedPrompt = encodeURIComponent(promptText);
+  const url = 'https://chatgpt.com/?q=' + encodedPrompt;
+
+  if (url.length > 8000) {
+    window.alert('프롬프트가 너무 길어 ChatGPT 링크로 열 수 없습니다. 복사하기 버튼을 사용해 주세요.');
+    return;
+  }
+
+  const openedWindow = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!openedWindow) {
+    window.alert('새 창을 열지 못했습니다. 브라우저 팝업 차단 설정을 확인해 주세요.');
+  }
 }
 
 function fallbackCopy(value) {
