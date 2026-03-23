@@ -424,14 +424,6 @@ function renderAiModal() {
   ].join('');
 }
 
-function normalizePromptQuestionText(value) {
-  return String(value)
-    .replace(/^나는\s+/, '')
-    .replace(/\s+/g, ' ')
-    .replace(/[.。]\s*$/, '')
-    .trim();
-}
-
 function buildAiPromptPayload() {
   const allQuestions = getAllQuestions();
   const totalScore = allQuestions.reduce(function(sum, question) {
@@ -440,10 +432,8 @@ function buildAiPromptPayload() {
   const overallAverage = allQuestions.length ? (totalScore / allQuestions.length).toFixed(2) : '0.00';
 
   const sectionLegend = [];
-  const compactLegend = [];
   const sectionSummary = [];
   const questionScores = [];
-  const compactQuestionScores = [];
 
   STATE.sections.forEach(function(section, sectionIndex) {
     const sectionCode = 'S' + (sectionIndex + 1);
@@ -452,7 +442,6 @@ function buildAiPromptPayload() {
     const sectionAverage = sectionQuestionCount ? (sectionScore / sectionQuestionCount).toFixed(2) : '0.00';
 
     sectionLegend.push(sectionCode + '=' + section.title + '|' + section.description);
-    compactLegend.push(sectionCode + '=' + section.title);
 
     const subsectionSummary = section.subsections.map(function(subsection, subsectionIndex) {
       const subsectionCode = sectionCode + '-' + (subsectionIndex + 1);
@@ -465,13 +454,11 @@ function buildAiPromptPayload() {
       }).filter(Boolean)));
 
       sectionLegend.push(subsectionCode + '=' + subsection.title + (categories.length ? '|' + categories.join(',') : ''));
-      compactLegend.push(subsectionCode + '=' + subsection.title);
 
       subsection.questions.forEach(function(question, questionIndex) {
         const questionCode = subsectionCode + '-' + (questionIndex + 1);
         const score = STATE.responses[question.id] || 0;
         questionScores.push(questionCode + '=' + score + '|' + question.text);
-        compactQuestionScores.push(questionCode + '=' + score + '|' + normalizePromptQuestionText(question.text));
       });
 
       return subsectionCode + ':' + subsectionAverage + '(' + subsectionScore + '/' + subsection.questions.length + ')';
@@ -485,10 +472,8 @@ function buildAiPromptPayload() {
     totalScore,
     overallAverage,
     sectionLegend,
-    compactLegend,
     sectionSummary,
     questionScores,
-    compactQuestionScores,
   };
 }
 
@@ -514,28 +499,6 @@ function buildAiPrompt() {
     '',
     '[문항별 점수]',
     payload.questionScores.join('\n'),
-  ].join('\n');
-}
-
-function buildChatGptLinkPrompt() {
-  const payload = buildAiPromptPayload();
-
-  return [
-    '교원 역량 컨설턴트로서 아래 1~5점 자기진단 데이터를 전문 리포트로 분석하라.',
-    '출력: 1종합진단 2영역별분석 3교사유형 4핵심과제Top3 5단기·중기·장기 실행전략 6성장로드맵 7전문가코멘트.',
-    '규칙: 단순 점수나열 금지, 행동기반 피드백, 수업·학생·학급·동료교사 맥락 반영, 간결하지만 전문적으로 작성.',
-    '',
-    '[요약]',
-    'Q=' + payload.allQuestions.length + ',T=' + payload.totalScore + ',A=' + payload.overallAverage,
-    '',
-    '[영역코드]',
-    payload.compactLegend.join('\n'),
-    '',
-    '[영역결과]',
-    payload.sectionSummary.join('\n'),
-    '',
-    '[문항점수]',
-    payload.compactQuestionScores.join('\n'),
   ].join('\n');
 }
 function bindEvents() {
@@ -652,16 +615,7 @@ function copyAiPrompt() {
 }
 
 function openChatGptPrompt() {
-  const promptText = buildChatGptLinkPrompt();
-  const encodedPrompt = encodeURIComponent(promptText);
-  const url = 'https://chatgpt.com/?q=' + encodedPrompt;
-
-  if (url.length > 8000) {
-    window.alert('프롬프트가 너무 길어 ChatGPT 링크로 열 수 없습니다. 복사하기 버튼을 사용해 주세요.');
-    return;
-  }
-
-  const openedWindow = window.open(url, '_blank', 'noopener,noreferrer');
+  const openedWindow = window.open('https://chatgpt.com', '_blank', 'noopener,noreferrer');
   if (!openedWindow) {
     window.alert('새 창을 열지 못했습니다. 브라우저 팝업 차단 설정을 확인해 주세요.');
   }
