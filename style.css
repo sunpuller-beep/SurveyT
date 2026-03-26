@@ -561,9 +561,13 @@ button {
 }
 
 .summary-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   padding: 12px;
   border-radius: 18px;
   background: var(--surface-low);
+  text-align: right;
 }
 
 .summary-stat strong {
