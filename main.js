@@ -1,4 +1,22 @@
+import {
+  buildAiPrompt,
+  getAllQuestions,
+  getQuestionCountLabel,
+  getUnansweredQuestions,
+  parseSurveyMarkdown,
+} from './js/survey.js';
+import {
+  clearSavedState,
+  hydrateState,
+  persistState,
+} from './js/storage.js';
+import {
+  getFocusableElements,
+  renderApp,
+} from './js/render.js';
+
 const app = document.getElementById('app');
+const questionCountChip = document.getElementById('question-count-chip');
 const STORAGE_KEY = 'surveyt-teacher-growth-state-v1';
 const PROMPT_URL = '/prompt.txt';
 
@@ -11,6 +29,8 @@ const STATE = {
   promptTemplate: '',
   aiModalOpen: false,
 };
+
+let lastFocusedElement = null;
 
 boot();
 
@@ -34,8 +54,8 @@ async function boot() {
 
     const markdown = await surveyResponse.text();
     STATE.promptTemplate = await promptResponse.text();
-    const parsed = parseSurveyMarkdown(markdown);
 
+    const parsed = parseSurveyMarkdown(markdown);
     STATE.title = parsed.title;
     STATE.sections = parsed.sections;
 
@@ -43,464 +63,24 @@ async function boot() {
       throw new Error('설문 섹션을 해석하지 못했습니다.');
     }
 
-    hydrateState();
+    hydrateState(STATE, STORAGE_KEY, getAllQuestions(STATE.sections));
+    updateQuestionCountChip();
     document.title = STATE.title + ' 설문';
     render();
   } catch (error) {
     app.innerHTML = '<div class="error-state">' + escapeHtml(error.message) + '</div>';
-  }
-}
-
-function parseSurveyMarkdown(markdown) {
-  const title = (markdown.split(/\r?\n/).find((line) => line.trim()) || '교원역량 행동지표').trim();
-  const lines = markdown.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const sections = [];
-
-  let currentSection = null;
-  let currentSubsection = null;
-  let questionId = 1;
-
-  for (const line of lines) {
-    if (line === title) {
-      continue;
-    }
-
-    if (isSectionHeading(line)) {
-      currentSection = {
-        id: 'section-' + (sections.length + 1),
-        title: normalizeHeading(line),
-        description: createSectionDescription(sections.length),
-        subsections: [],
-      };
-      sections.push(currentSection);
-      currentSubsection = null;
-      continue;
-    }
-
-    if (/^[①-⑫]/.test(line)) {
-      if (!currentSection) {
-        continue;
-      }
-
-      currentSubsection = {
-        id: 'subsection-' + sections.length + '-' + (currentSection.subsections.length + 1),
-        title: normalizeHeading(line),
-        questions: [],
-      };
-      currentSection.subsections.push(currentSubsection);
-      continue;
-    }
-
-    if (/^（.+）/.test(line) && currentSubsection) {
-      const match = line.match(/^（(.+?)）(.+)$/);
-      const question = {
-        id: 'q-' + questionId++,
-        category: match ? match[1].trim() : '',
-        text: match ? match[2].trim() : line,
-      };
-      currentSubsection.questions.push(question);
+    if (questionCountChip) {
+      questionCountChip.textContent = '문항 수 확인 필요';
     }
   }
-
-  return { title, sections };
-}
-
-function isSectionHeading(line) {
-  return /^[1-4１-４][\.。]/.test(line) || /^[1-4１-４]\\\./.test(line);
-}
-
-function normalizeHeading(line) {
-  return line
-    .replace(/^[1-4１-４]\\\./, '')
-    .replace(/^[1-4１-４][\.。]\s*/, '')
-    .replace(/^[①-⑫]\s*/, '')
-    .trim();
-}
-
-function createSectionDescription(index) {
-  const descriptions = [
-    '교수 역량 전반을 점검하는 영역입니다. 교육과정, 수업, 학습지원에 대한 자기진단으로 구성됩니다.',
-    '생활교육 관련 실천 역량을 살피는 영역입니다. 학생 이해, 생활인성 지도, 진로지도 문항을 포함합니다.',
-    '교육공동체와의 관계 및 협업 역량을 진단하는 영역입니다. 소통, 학교공동체 참여, 네트워크 활용을 다룹니다.',
-    '자기개발과 전문성 유지 역량을 확인하는 영역입니다. 변화대응, 자기개발, 교직윤리 문항으로 구성됩니다.',
-  ];
-
-  return descriptions[index] || '해당 영역에 대한 자기진단 문항입니다.';
-}
-
-function hydrateState() {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return;
-    }
-
-    const saved = JSON.parse(raw);
-    const validQuestionIds = new Set(getAllQuestions().map(function(question) {
-      return question.id;
-    }));
-
-    STATE.responses = Object.entries(saved.responses || {}).reduce(function(acc, entry) {
-      const key = entry[0];
-      const value = Number(entry[1]);
-      if (validQuestionIds.has(key) && value >= 1 && value <= 5) {
-        acc[key] = value;
-      }
-      return acc;
-    }, {});
-
-    STATE.pageIndex = Number.isInteger(saved.pageIndex)
-      ? Math.min(Math.max(saved.pageIndex, 0), STATE.sections.length)
-      : 0;
-    STATE.savedAt = saved.savedAt || null;
-  } catch (_error) {
-    STATE.responses = {};
-    STATE.pageIndex = 0;
-    STATE.savedAt = null;
-  }
-}
-
-function persistState() {
-  STATE.savedAt = new Date().toISOString();
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    responses: STATE.responses,
-    pageIndex: STATE.pageIndex,
-    savedAt: STATE.savedAt,
-  }));
-}
-
-function clearSavedState() {
-  STATE.responses = {};
-  STATE.pageIndex = 0;
-  STATE.savedAt = null;
-  window.localStorage.removeItem(STORAGE_KEY);
 }
 
 function render() {
-  const totalPages = STATE.sections.length + 1;
-  const progress = Math.round(((STATE.pageIndex + 1) / totalPages) * 100);
-  const mainMarkup = STATE.pageIndex < STATE.sections.length
-    ? renderSectionPage(STATE.sections[STATE.pageIndex], STATE.pageIndex)
-    : renderResultPage();
-  const modalMarkup = STATE.aiModalOpen ? renderAiModal() : '';
-
-  app.innerHTML = [
-    '<div class="progress-strip">',
-    '  <div class="progress-strip__bar">',
-    '    <div class="progress-strip__fill" style="width: ' + progress + '%;"></div>',
-    '  </div>',
-    '  <div class="progress-strip__text">페이지 ' + (STATE.pageIndex + 1) + ' / ' + totalPages + '</div>',
-    '</div>',
-    mainMarkup,
-    modalMarkup,
-  ].join('');
-
+  renderApp(app, STATE);
   bindEvents();
+  syncModalAccessibility();
 }
 
-function renderSectionPage(section, pageIndex) {
-  const questionCount = countSectionQuestions(section);
-  const answeredCount = countAnsweredQuestions(section);
-  const subsectionMarkup = section.subsections.map(function(subsection, subsectionIndex) {
-    return [
-      '<article class="subsection-block">',
-      '  <div class="subsection-header">',
-      '    <div>',
-      '      <p class="subsection-label">Dimension ' + (pageIndex + 1) + '.' + (subsectionIndex + 1) + '</p>',
-      '      <h3 class="subsection-title">' + escapeHtml(subsection.title) + '</h3>',
-      '    </div>',
-      '    <span class="subsection-meta">' + subsection.questions.length + '개 문항</span>',
-      '  </div>',
-      subsection.questions.map(renderQuestionCard).join(''),
-      '</article>',
-    ].join('');
-  }).join('');
-
-  return [
-    '<section class="section-page">',
-    '  <div class="section-header">',
-    '    <div>',
-    '      <p class="page-label">Part ' + String(pageIndex + 1).padStart(2, '0') + '</p>',
-    '      <h2>' + escapeHtml(section.title) + '</h2>',
-    '      <p class="section-desc">' + escapeHtml(section.description) + '</p>',
-    '    </div>',
-    '    <div class="section-meta">',
-    '      <span class="score-hint">응답 현황</span>',
-    '      <strong>' + answeredCount + ' / ' + questionCount + '</strong>',
-    '      <span class="save-hint">' + renderSaveHint() + '</span>',
-    '    </div>',
-    '  </div>',
-    subsectionMarkup,
-    '  <div class="page-actions">',
-    '    <div class="page-actions__hint">단계별 응답은 언제나 수정 가능합니다.(현재 응답 결과에만 사용되며, 별도 저장되지 않습니다.)</div>',
-    '    <div class="button-row">',
-    '      <button class="btn btn--ghost" type="button" data-action="prev" ' + (pageIndex === 0 ? 'disabled' : '') + '>이전 페이지</button>',
-    '      <button class="btn btn--primary" type="button" data-action="next">' + (pageIndex === STATE.sections.length - 1 ? '결과 보기' : '다음 페이지') + '</button>',
-    '    </div>',
-    '  </div>',
-    '</section>',
-  ].join('');
-}
-
-function renderQuestionCard(question) {
-  const selected = STATE.responses[question.id];
-  const optionsMarkup = [1, 2, 3, 4, 5].map(function(value) {
-    return [
-      '<label class="scale-option">',
-      '  <input type="radio" name="' + question.id + '" value="' + value + '" ' + (selected === value ? 'checked' : '') + ' data-question-id="' + question.id + '">',
-      '  <span>' + value + '</span>',
-      '</label>',
-    ].join('');
-  }).join('');
-
-  return [
-    '<div class="question-card">',
-    '  <p class="question-text"><strong>[' + escapeHtml(question.category) + ']</strong> ' + escapeHtml(question.text) + '</p>',
-    '  <div class="scale-legend"><span>아니다</span><span>그렇다</span></div>',
-    '  <div class="scale-row" role="radiogroup" aria-label="' + escapeHtml(question.text) + '">',
-    optionsMarkup,
-    '  </div>',
-    '</div>',
-  ].join('');
-}
-
-function renderResultPage() {
-  const summaries = STATE.sections.map(function(section) {
-    const score = getSectionScore(section);
-    const questionCount = countSectionQuestions(section);
-    const maxScore = questionCount * 5;
-    const average = questionCount ? (score / questionCount).toFixed(2) : '0.00';
-    const percent = maxScore ? Math.round((score / maxScore) * 100) : 0;
-    const subsectionRows = section.subsections.map(function(subsection) {
-      const subsectionScore = getSubsectionScore(subsection);
-      const subsectionMax = subsection.questions.length * 5;
-      const subsectionAverage = subsection.questions.length
-        ? (subsectionScore / subsection.questions.length).toFixed(2)
-        : '0.00';
-
-      return [
-        '<tr>',
-        '  <td>' + escapeHtml(subsection.title) + '</td>',
-        '  <td>' + subsection.questions.length + '</td>',
-        '  <td>' + subsectionScore + ' / ' + subsectionMax + '</td>',
-        '  <td>' + subsectionAverage + '</td>',
-        '</tr>',
-      ].join('');
-    }).join('');
-
-    return { section, score, questionCount, maxScore, average, percent, subsectionRows };
-  });
-
-  const summaryMarkup = summaries.map(function(item) {
-    return [
-      '<article class="summary-card">',
-      '  <div class="summary-card__head">',
-      '    <div>',
-      '      <p class="chart-label">' + escapeHtml(item.section.title) + '</p>',
-      '      <h3>' + escapeHtml(item.section.description) + '</h3>',
-      '    </div>',
-      '    <span class="meta-chip">' + item.percent + '%</span>',
-      '  </div>',
-      renderDonutChart(item.score, item.maxScore, item.percent),
-      '  <div class="summary-stats">',
-      '    <div class="summary-stat"><strong>' + item.questionCount + '개</strong><span>문항 수</span></div>',
-      '    <div class="summary-stat"><strong>' + item.average + '</strong><span>평균 점수</span></div>',
-      '    <div class="summary-stat"><strong>' + item.percent + '%</strong><span>달성 비율</span></div>',
-      '  </div>',
-      '  <div class="detail-table-wrap">',
-      '    <table class="detail-table">',
-      '      <thead><tr><th>세부영역</th><th>문항</th><th>합계</th><th>평균</th></tr></thead>',
-      '      <tbody>' + item.subsectionRows + '</tbody>',
-      '    </table>',
-      '  </div>',
-      '</article>',
-    ].join('');
-  }).join('');
-
-  return [
-    '<section class="result-page">',
-    '  <div class="result-header">',
-    '    <div>',
-    '      <p class="page-label">Results</p>',
-    '      <h2 class="no-print">영역별 결과 보기</h2>',
-    '      <h2 class="print-only">경남 교원 핵심역량 진단 결과</h2>',
-    '      <p class="result-subtitle no-print">각 대영역의 합계를 파이차트로 시각화했습니다. 파란 영역은 현재 획득 점수, 회색 영역은 남은 최대 점수입니다.</p>',
-    '      <p class="result-subtitle print-only">진단 일시: ' + renderDiagnosisDatetime() + '</p>',
-    '    </div>',
-    '    <div class="section-meta no-print">',
-    '      <span class="score-hint">총 응답 수</span>',
-    '      <strong>' + Object.keys(STATE.responses).length + ' / ' + getAllQuestions().length + '</strong>',
-    '      <span class="save-hint">' + renderSaveHint() + '</span>',
-    '    </div>',
-    '  </div>',
-    '  <div class="result-grid">',
-    summaryMarkup,
-    '  </div>',
-    '  <div class="result-footer">',
-    '    <div class="button-row">',
-    '      <button class="btn btn--ghost" type="button" data-action="prev">이전 페이지</button>',
-    '      <button class="btn btn--primary" type="button" data-action="ai-analysis">AI결과 분석</button>',
-    '      <button class="btn btn--ghost" type="button" data-action="print">인쇄 / PDF 저장</button>',
-    '      <button class="btn btn--ghost" type="button" data-action="reset">응답 초기화</button>',
-    '      <button class="btn btn--success" type="button" data-action="restart">처음으로 이동</button>',
-    '    </div>',
-    '  </div>',
-    '</section>',
-  ].join('');
-}
-
-function renderSaveHint() {
-  if (!STATE.savedAt) {
-    return '저장 대기 중';
-  }
-
-  const savedDate = new Date(STATE.savedAt);
-  if (Number.isNaN(savedDate.getTime())) {
-    return '자동 저장됨';
-  }
-
-  const time = savedDate.toLocaleTimeString('ko-KR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-  return time + ' 자동 저장';
-}
-
-function renderDonutChart(score, maxScore, percent) {
-  const radius = 46;
-  const circumference = 2 * Math.PI * radius;
-  const dash = (circumference * percent) / 100;
-  const gap = circumference - dash;
-
-  return [
-    '<div class="chart" aria-label="점수 ' + score + ' / ' + maxScore + '">',
-    '  <svg class="chart__svg" viewBox="0 0 120 120" aria-hidden="true">',
-    '    <circle class="chart__track" cx="60" cy="60" r="46"></circle>',
-    '    <circle class="chart__fill" cx="60" cy="60" r="46" stroke-dasharray="' + dash.toFixed(2) + ' ' + gap.toFixed(2) + '"></circle>',
-    '  </svg>',
-    '  <div class="chart__center">',
-    '    <span class="chart__score">' + score + '</span>',
-    '    <span class="chart__meta">/ ' + maxScore + '점</span>',
-    '  </div>',
-    '</div>',
-  ].join('');
-}
-
-function renderDiagnosisDatetime() {
-  const base = STATE.savedAt ? new Date(STATE.savedAt) : new Date();
-  const date = Number.isNaN(base.getTime()) ? new Date() : base;
-
-  return date.toLocaleString('ko-KR', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function renderAiModal() {
-  const promptText = buildAiPrompt();
-
-  return [
-    '<div class="modal-backdrop" data-action="close-modal"></div>',
-    '<section class="modal-sheet" role="dialog" aria-modal="true" aria-labelledby="ai-modal-title">',
-    '  <div class="modal-sheet__header">',
-    '    <div>',
-    '      <h3 id="ai-modal-title" class="modal-sheet__title">AI도구 활용 결과 분석</h3>',
-    '      <p class="modal-sheet__subtext">아래 내용을 복사해서 AI 도구(ChatGPT, 제미나이 등)에 분석해보세요</p>',
-    '    </div>',
-    '    <div class="button-row">',
-    '      <button class="btn btn--primary btn--compact" type="button" data-action="open-chatgpt">ChatGPT</button>',
-    '      <button class="btn btn--ghost btn--compact" type="button" data-action="copy-ai-prompt">복사하기</button>',
-    '      <button class="btn btn--ghost btn--compact" type="button" data-action="close-modal">닫기</button>',
-    '    </div>',
-    '  </div>',
-    '  <div class="modal-sheet__body">',
-    '    <textarea class="modal-prompt" readonly>' + escapeHtml(promptText) + '</textarea>',
-    '  </div>',
-    '</section>',
-  ].join('');
-}
-
-function buildAiPromptPayload() {
-  const allQuestions = getAllQuestions();
-  const totalScore = allQuestions.reduce(function(sum, question) {
-    return sum + (STATE.responses[question.id] || 0);
-  }, 0);
-  const overallAverage = allQuestions.length ? (totalScore / allQuestions.length).toFixed(2) : '0.00';
-
-  const sectionLegend = [];
-  const sectionSummary = [];
-  const questionScores = [];
-
-  STATE.sections.forEach(function(section, sectionIndex) {
-    const sectionCode = 'S' + (sectionIndex + 1);
-    const sectionQuestionCount = countSectionQuestions(section);
-    const sectionScore = getSectionScore(section);
-    const sectionAverage = sectionQuestionCount ? (sectionScore / sectionQuestionCount).toFixed(2) : '0.00';
-
-    sectionLegend.push(sectionCode + '=' + section.title + '|' + section.description);
-
-    const subsectionSummary = section.subsections.map(function(subsection, subsectionIndex) {
-      const subsectionCode = sectionCode + '-' + (subsectionIndex + 1);
-      const subsectionScore = getSubsectionScore(subsection);
-      const subsectionAverage = subsection.questions.length
-        ? (subsectionScore / subsection.questions.length).toFixed(2)
-        : '0.00';
-      const categories = Array.from(new Set(subsection.questions.map(function(question) {
-        return question.category;
-      }).filter(Boolean)));
-
-      sectionLegend.push(subsectionCode + '=' + subsection.title + (categories.length ? '|' + categories.join(',') : ''));
-
-      subsection.questions.forEach(function(question, questionIndex) {
-        const questionCode = subsectionCode + '-' + (questionIndex + 1);
-        const score = STATE.responses[question.id] || 0;
-        questionScores.push(questionCode + '=' + score + '|' + question.text);
-      });
-
-      return subsectionCode + ':' + subsectionAverage + '(' + subsectionScore + '/' + subsection.questions.length + ')';
-    }).join(' ; ');
-
-    sectionSummary.push(sectionCode + ':' + sectionAverage + '(' + sectionScore + '/' + sectionQuestionCount + ') [' + subsectionSummary + ']');
-  });
-
-  return {
-    allQuestions,
-    totalScore,
-    overallAverage,
-    sectionLegend,
-    sectionSummary,
-    questionScores,
-  };
-}
-
-function buildAiPrompt() {
-  const payload = buildAiPromptPayload();
-
-  return [
-    STATE.promptTemplate.trim(),
-    '',
-    '[데이터 규칙]',
-    '- 점수는 1~5점: 1 매우 낮음, 3 보통, 5 매우 높음',
-    '- 코드 체계: S영역-세부영역-문항번호',
-    '- 범례와 점수를 함께 읽고 강점, 약점, 패턴을 해석할 것',
-    '',
-    '[전체 요약]',
-    '- 문항수=' + payload.allQuestions.length + ', 총점=' + payload.totalScore + ', 평균=' + payload.overallAverage,
-    '',
-    '[영역/세부영역 범례]',
-    payload.sectionLegend.join('\n'),
-    '',
-    '[영역별 결과]',
-    payload.sectionSummary.join('\n'),
-    '',
-    '[문항별 점수]',
-    payload.questionScores.join('\n'),
-  ].join('\n');
-}
 function bindEvents() {
   app.querySelectorAll('input[type="radio"]').forEach(function(input) {
     input.addEventListener('change', handleAnswerChange);
@@ -509,18 +89,14 @@ function bindEvents() {
   app.querySelectorAll('[data-action]').forEach(function(button) {
     button.addEventListener('click', handleAction);
   });
-
-  const modalPrompt = app.querySelector('.modal-prompt');
-  if (modalPrompt) {
-    modalPrompt.scrollTop = 0;
-  }
 }
 
 function handleAnswerChange(event) {
   const questionId = event.target.dataset.questionId;
   const value = Number(event.target.value);
+
   STATE.responses[questionId] = value;
-  persistState();
+  persistState(STATE, STORAGE_KEY);
   render();
 }
 
@@ -529,7 +105,7 @@ function handleAction(event) {
 
   if (action === 'prev') {
     STATE.pageIndex = Math.max(0, STATE.pageIndex - 1);
-    persistState();
+    persistState(STATE, STORAGE_KEY);
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     return;
@@ -537,7 +113,7 @@ function handleAction(event) {
 
   if (action === 'next') {
     const currentSection = STATE.sections[STATE.pageIndex];
-    const unanswered = getUnansweredQuestions(currentSection);
+    const unanswered = getUnansweredQuestions(currentSection, STATE.responses);
 
     if (unanswered.length) {
       window.alert('현재 페이지에 미응답 문항이 ' + unanswered.length + '개 있습니다. 모두 응답한 뒤 다음으로 이동해 주세요.');
@@ -545,7 +121,7 @@ function handleAction(event) {
     }
 
     STATE.pageIndex = Math.min(STATE.sections.length, STATE.pageIndex + 1);
-    persistState();
+    persistState(STATE, STORAGE_KEY);
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     return;
@@ -553,21 +129,21 @@ function handleAction(event) {
 
   if (action === 'restart') {
     STATE.pageIndex = 0;
-    persistState();
+    persistState(STATE, STORAGE_KEY);
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     return;
   }
 
   if (action === 'ai-analysis') {
+    lastFocusedElement = event.currentTarget;
     STATE.aiModalOpen = true;
     render();
     return;
   }
 
   if (action === 'close-modal') {
-    STATE.aiModalOpen = false;
-    render();
+    closeModal();
     return;
   }
 
@@ -592,15 +168,23 @@ function handleAction(event) {
       return;
     }
 
-    clearSavedState();
-    STATE.aiModalOpen = false;
+    clearSavedState(STATE, STORAGE_KEY);
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 }
 
+function closeModal() {
+  STATE.aiModalOpen = false;
+  render();
+
+  if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') {
+    lastFocusedElement.focus();
+  }
+}
+
 function copyAiPrompt() {
-  const promptText = buildAiPrompt();
+  const promptText = buildAiPrompt(STATE);
 
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(promptText).then(function() {
@@ -631,46 +215,84 @@ function fallbackCopy(value) {
   window.alert('AI 분석 프롬프트를 복사했습니다.');
 }
 
-function getAllQuestions() {
-  return STATE.sections.flatMap(function(section) {
-    return section.subsections.flatMap(function(subsection) {
-      return subsection.questions;
-    });
-  });
+function syncModalAccessibility() {
+  document.removeEventListener('keydown', handleDocumentKeydown);
+
+  if (!STATE.aiModalOpen) {
+    return;
+  }
+
+  const modal = app.querySelector('.modal-sheet');
+  if (!modal) {
+    return;
+  }
+
+  document.addEventListener('keydown', handleDocumentKeydown);
+
+  const focusableElements = getFocusableElements(modal);
+  const firstFocusable = focusableElements[0];
+
+  if (firstFocusable) {
+    firstFocusable.focus();
+  } else {
+    modal.setAttribute('tabindex', '-1');
+    modal.focus();
+  }
+
+  const modalPrompt = modal.querySelector('.modal-prompt');
+  if (modalPrompt) {
+    modalPrompt.scrollTop = 0;
+  }
 }
 
-function countSectionQuestions(section) {
-  return section.subsections.reduce(function(sum, subsection) {
-    return sum + subsection.questions.length;
-  }, 0);
+function handleDocumentKeydown(event) {
+  if (!STATE.aiModalOpen) {
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeModal();
+    return;
+  }
+
+  if (event.key !== 'Tab') {
+    return;
+  }
+
+  const modal = app.querySelector('.modal-sheet');
+  if (!modal) {
+    return;
+  }
+
+  const focusableElements = getFocusableElements(modal);
+  if (!focusableElements.length) {
+    event.preventDefault();
+    modal.focus();
+    return;
+  }
+
+  const firstFocusable = focusableElements[0];
+  const lastFocusable = focusableElements[focusableElements.length - 1];
+
+  if (event.shiftKey && document.activeElement === firstFocusable) {
+    event.preventDefault();
+    lastFocusable.focus();
+    return;
+  }
+
+  if (!event.shiftKey && document.activeElement === lastFocusable) {
+    event.preventDefault();
+    firstFocusable.focus();
+  }
 }
 
-function countAnsweredQuestions(section) {
-  return section.subsections.reduce(function(sum, subsection) {
-    return sum + subsection.questions.filter(function(question) {
-      return Boolean(STATE.responses[question.id]);
-    }).length;
-  }, 0);
-}
+function updateQuestionCountChip() {
+  if (!questionCountChip) {
+    return;
+  }
 
-function getSectionScore(section) {
-  return section.subsections.reduce(function(sum, subsection) {
-    return sum + getSubsectionScore(subsection);
-  }, 0);
-}
-
-function getSubsectionScore(subsection) {
-  return subsection.questions.reduce(function(questionSum, question) {
-    return questionSum + (STATE.responses[question.id] || 0);
-  }, 0);
-}
-
-function getUnansweredQuestions(section) {
-  return section.subsections.flatMap(function(subsection) {
-    return subsection.questions;
-  }).filter(function(question) {
-    return !STATE.responses[question.id];
-  });
+  questionCountChip.textContent = getQuestionCountLabel(getAllQuestions(STATE.sections).length);
 }
 
 function escapeHtml(value) {
